@@ -186,7 +186,8 @@
 <div id="configScreen" class="auth-screen" hidden>
   <div class="config-note">
     <h1 style="font-size:20px;margin-bottom:10px">Falta conectar la base de datos</h1>
-    <p>Esta página está lista, pero necesita las claves de tu proyecto de Firebase para poder guardar tus datos en la nube (así los ves desde cualquier navegador o PC). Abre el archivo <code>control_rendimiento.html</code>, busca el bloque <code>firebaseConfig</code> cerca del final del script y pega ahí los valores de tu proyecto.</p>
+    <p>Esta página está lista, pero necesita las claves de tu proyecto de Firebase para poder guardar tus datos en la nube (así los ves desde cualquier navegador o PC). Abre el archivo <code>control_rendimiento.html</code>, busca el bloque <code>firebaseConfig</code> cerca del final del script y 
+	ahí los valores de tu proyecto.</p>
     <p>Si aún no tienes el proyecto creado, sigue los pasos que te di en la conversación antes de subir este archivo a GitHub.</p>
   </div>
 </div>
@@ -299,6 +300,28 @@
     </section>
 
     <section class="panel">
+      <div class="section-head">
+        <h2>Histórico general</h2>
+      </div>
+      <div class="stat-strip" id="historicoStrip"></div>
+      <div id="historicoBody">
+        <div class="table-wrap" style="margin-bottom:14px">
+          <table>
+            <thead><tr><th>Año</th><th>Resultado</th><th>Retirado</th></tr></thead>
+            <tbody id="historicoYearBody"></tbody>
+          </table>
+        </div>
+        <div class="table-wrap" id="cyclesTableWrap" hidden>
+          <table>
+            <thead><tr><th>Bankroll cerrado</th><th>Capital inicial</th><th>Resultado final</th><th>Rendimiento</th></tr></thead>
+            <tbody id="historicoCyclesBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="empty-note" id="historicoEmpty" hidden>Aún no hay datos suficientes para un histórico general — se va llenando solo a medida que registras días y cierras bankrolls.</div>
+    </section>
+
+    <section class="panel">
       <details class="account-panel">
         <summary>Cuenta y datos</summary>
         <div class="account-grid">
@@ -313,6 +336,7 @@
         <div class="account-actions">
           <button class="btn-secondary" onclick="exportData()">Descargar copia (JSON)</button>
           <button class="btn-secondary" onclick="document.getElementById('importFile').click()">Restaurar desde archivo</button>
+          <button class="btn-secondary" onclick="closeCycle()">Cerrar este bankroll</button>
           <button class="btn-danger" onclick="handleLogout()">Cerrar sesión</button>
         </div>
         <input type="file" id="importFile" accept="application/json" hidden onchange="importData(event)">
@@ -365,6 +389,8 @@ let view = "day";
 let editingDate = null;
 let unsubEntries = null;
 let unsubUser = null;
+let unsubCycles = null;
+let cycles = [];
 let chart = null;
 
 const AUTH_ERRORS = {
@@ -388,6 +414,38 @@ function capitalize(s){ return s.charAt(0).toUpperCase()+s.slice(1); }
 function fmtDay(dateStr){
   return new Date(dateStr+"T12:00:00").toLocaleDateString("es-CO",{day:"2-digit",month:"short"});
 }
+function animateNumber(el, to, duration){
+  duration = duration || 700;
+  const from = Number(el.dataset.raw || 0);
+  if(from===to){ el.textContent = (to>=0?"+":"") + money(to); el.dataset.raw = to; return; }
+  const start = performance.now();
+  function tick(now){
+    const t = Math.min(1, (now-start)/duration);
+    const eased = 1 - Math.pow(1-t, 3);
+    const val = from + (to-from)*eased;
+    el.textContent = (val>=0?"+":"") + money(val);
+    if(t<1) requestAnimationFrame(tick); else el.dataset.raw = to;
+  }
+  requestAnimationFrame(tick);
+}
+const zeroLinePlugin = {
+  id: "zeroLine",
+  afterDraw(c){
+    const { ctx, chartArea, scales } = c;
+    if(!scales.y || !chartArea) return;
+    const y0 = scales.y.getPixelForValue(0);
+    if(y0 < chartArea.top || y0 > chartArea.bottom) return;
+    ctx.save();
+    ctx.strokeStyle = "rgba(28,36,31,.3)";
+    ctx.setLineDash([4,4]);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(chartArea.left, y0);
+    ctx.lineTo(chartArea.right, y0);
+    ctx.stroke();
+    ctx.restore();
+  }
+};
 
 /* ---------- Auth screens ---------- */
 function switchAuthTab(which){
@@ -455,6 +513,7 @@ auth.onAuthStateChanged(user=>{
   currentUser = user;
   if(unsubEntries){ unsubEntries(); unsubEntries=null; }
   if(unsubUser){ unsubUser(); unsubUser=null; }
+  if(unsubCycles){ unsubCycles(); unsubCycles=null; }
 
   document.getElementById("authScreen").hidden = !!user;
   document.getElementById("onboardScreen").hidden = true;
@@ -478,6 +537,13 @@ auth.onAuthStateChanged(user=>{
       unsubEntries = db.collection("users").doc(user.uid).collection("entries")
         .onSnapshot(qs=>{
           entries = qs.docs.map(d=>d.data());
+          render();
+        });
+    }
+    if(!unsubCycles){
+      unsubCycles = db.collection("users").doc(user.uid).collection("cycles")
+        .onSnapshot(qs=>{
+          cycles = qs.docs.map(d=>({ id:d.id, ...d.data() }));
           render();
         });
     }
@@ -540,6 +606,48 @@ function saveCapital(){
     .then(()=>toast("Capital inicial actualizado."));
 }
 window.saveCapital = saveCapital;
+
+/* ---------- Cerrar bankroll (archivar ciclo) ---------- */
+function closeCycle(){
+  if(entries.length===0){ toast("No hay nada que cerrar todavía."); return; }
+  const daily = calculateDaily();
+  const last = daily[daily.length-1];
+  const ok = confirm(
+    "Esto archiva tu historial actual (" + daily.length + " día(s), resultado " +
+    (last.cumulative>=0?"+":"") + money(last.cumulative) + ") como un bankroll cerrado, " +
+    "lo saca de tu control activo y te deja empezar uno nuevo. Vas a poder consultarlo " +
+    "siempre en 'Histórico general'. ¿Continuar?"
+  );
+  if(!ok) return;
+
+  const input = prompt("¿Con cuánto capital inicia el nuevo bankroll?", "");
+  if(input===null) return;
+  const newCapital = Number(input);
+  if(!Number.isFinite(newCapital) || newCapital<0){ toast("Capital inválido, no se cerró el bankroll."); return; }
+
+  const cycleDoc = {
+    closedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    startDate: daily[0].date,
+    endDate: last.date,
+    capitalInicial,
+    finalBalance: last.balance,
+    totalWithdrawn: last.withdrawals,
+    finalResult: last.cumulative,
+    finalRoi: last.roi,
+    entries: daily.map(r=>({ date:r.date, balance:r.balance, withdrawal:r.withdrawal, note:r.note||"", result:r.result, cumulative:r.cumulative, roi:r.roi }))
+  };
+
+  const batch = db.batch();
+  const userRef = db.collection("users").doc(currentUser.uid);
+  const entriesCol = userRef.collection("entries");
+  const cycleRef = userRef.collection("cycles").doc();
+  batch.set(cycleRef, cycleDoc);
+  entries.forEach(e=> batch.delete(entriesCol.doc(e.date)) );
+  batch.set(userRef, { capitalInicial: newCapital }, { merge:true });
+
+  batch.commit().then(()=>toast("Bankroll cerrado y archivado."));
+}
+window.closeCycle = closeCycle;
 
 /* ---------- Backup ---------- */
 function exportData(){
@@ -652,8 +760,8 @@ function render(){
   document.getElementById("statCurrent").textContent = money(current);
   document.getElementById("statWithdrawn").textContent = money(withdrawn);
   const heroEl = document.getElementById("heroResult");
-  heroEl.textContent = (result>=0?"+":"") + money(result);
   heroEl.className = "board-number " + (result>=0?"positive":"negative");
+  animateNumber(heroEl, result);
   document.getElementById("heroRoi").textContent = pct(roi) + " sobre el capital inicial";
 
   renderStatStrip(daily);
@@ -666,6 +774,7 @@ function render(){
 
   renderTable(grouped);
   renderChart(grouped);
+  renderHistorico();
 }
 
 function renderStatStrip(daily){
@@ -725,8 +834,14 @@ function renderTable(rows){
 
 function renderChart(rows){
   if(rows.length===0){ if(chart){chart.destroy(); chart=null;} return; }
-  const ctx = document.getElementById("chart").getContext("2d");
+  const canvas = document.getElementById("chart");
+  const ctx = canvas.getContext("2d");
   if(chart) chart.destroy();
+
+  const gradient = ctx.createLinearGradient(0,0,0,canvas.clientHeight||280);
+  gradient.addColorStop(0,"rgba(201,162,75,.28)");
+  gradient.addColorStop(1,"rgba(201,162,75,0)");
+
   chart = new Chart(ctx, {
     data:{
       labels: rows.map(r=>r.label),
@@ -734,28 +849,97 @@ function renderChart(rows){
         {
           type:"bar", label:"Resultado del periodo",
           data: rows.map(r=>r.result),
-          backgroundColor: rows.map(r=>r.result>=0 ? "rgba(44,110,82,.55)" : "rgba(139,50,41,.55)"),
-          borderRadius:3, order:2, yAxisID:"y1"
+          backgroundColor: rows.map(r=>r.result>=0 ? "rgba(44,110,82,.85)" : "rgba(139,50,41,.8)"),
+          borderRadius:4, maxBarThickness:30, order:2, yAxisID:"y1"
         },
         {
           type:"line", label:"Acumulado",
           data: rows.map(r=>r.cumulative),
-          borderColor:"#C9A24B", backgroundColor:"transparent",
-          borderWidth:2.5, tension:.25, pointRadius:3, pointBackgroundColor:"#C9A24B",
+          borderColor:"#C9A24B", backgroundColor:gradient, fill:true,
+          borderWidth:2.5, tension:.3,
+          pointRadius:rows.length>1?2:4, pointHoverRadius:6,
+          pointBackgroundColor:"#C9A24B", pointBorderColor:"#FBF8F0", pointBorderWidth:1.5,
           order:1, yAxisID:"y"
         }
       ]
     },
+    plugins:[zeroLinePlugin],
     options:{
       responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{ position:"bottom", labels:{ color:"#5B6660", font:{family:"IBM Plex Sans", size:11.5} } } },
+      animation:{ duration:850, easing:"easeOutQuart" },
+      interaction:{ mode:"index", intersect:false },
+      plugins:{
+        legend:{
+          position:"bottom",
+          labels:{ color:"#5B6660", usePointStyle:true, pointStyle:"circle", boxWidth:7, font:{family:"IBM Plex Sans", size:11.5} }
+        },
+        tooltip:{
+          backgroundColor:"#0E3B2E", titleColor:"#E9D9A8", bodyColor:"#FBF8F0",
+          borderColor:"#C9A24B", borderWidth:1, padding:10, cornerRadius:8, displayColors:false,
+          callbacks:{ label: (c)=> c.dataset.label + ": " + (c.parsed.y>=0?"+":"") + money(c.parsed.y) }
+        }
+      },
       scales:{
-        x:{ ticks:{ color:"#5B6660", font:{family:"IBM Plex Mono", size:11} }, grid:{ color:"#E4DBC2" } },
-        y:{ position:"left", ticks:{ color:"#5B6660", callback:v=>"$"+Number(v).toLocaleString("es-CO"), font:{family:"IBM Plex Mono", size:10.5} }, grid:{ color:"#E4DBC2" } },
+        x:{
+          ticks:{ color:"#5B6660", font:{family:"IBM Plex Mono", size:10.5}, maxRotation:0, minRotation:0, autoSkip:true, autoSkipPadding:14 },
+          grid:{ display:false }
+        },
+        y:{ position:"left", ticks:{ color:"#5B6660", callback:v=>"$"+Number(v).toLocaleString("es-CO"), font:{family:"IBM Plex Mono", size:10.5} }, grid:{ color:"#E4DBC2", borderDash:[3,4] } },
         y1:{ position:"right", ticks:{ display:false }, grid:{ display:false } }
       }
     }
   });
+}
+
+function renderHistorico(){
+  const daily = calculateDaily();
+  const last = daily[daily.length-1];
+
+  const allRows = [ ...daily, ...cycles.flatMap(c=>c.entries||[]) ];
+  const hasAnything = allRows.length>0 || cycles.length>0;
+
+  document.getElementById("historicoEmpty").hidden = hasAnything;
+  document.getElementById("historicoBody").hidden = !hasAnything;
+  if(!hasAnything) return;
+
+  const capitalTotal = capitalInicial + cycles.reduce((s,c)=>s+(c.capitalInicial||0),0);
+  const retiradoTotal = (last?last.withdrawals:0) + cycles.reduce((s,c)=>s+(c.totalWithdrawn||0),0);
+  const netoTotal = (last?last.cumulative:0) + cycles.reduce((s,c)=>s+(c.finalResult||0),0);
+
+  document.getElementById("historicoStrip").innerHTML = `
+    <div class="stub"><span>Bankrolls cerrados</span><b>${cycles.length}</b></div>
+    <div class="stub"><span>Capital invertido total</span><b>${money(capitalTotal)}</b></div>
+    <div class="stub"><span>Retirado histórico</span><b>${money(retiradoTotal)}</b></div>
+    <div class="stub"><span>Resultado neto histórico</span><b class="${netoTotal>=0?'positive':'negative'}">${netoTotal>=0?"+":""}${money(netoTotal)}</b></div>
+  `;
+
+  const byYear = new Map();
+  allRows.forEach(r=>{
+    const y = r.date.slice(0,4);
+    if(!byYear.has(y)) byYear.set(y,{year:y,result:0,withdrawal:0});
+    const g = byYear.get(y);
+    g.result += r.result;
+    g.withdrawal += r.withdrawal;
+  });
+  const years = [...byYear.values()].sort((a,b)=>b.year.localeCompare(a.year));
+  document.getElementById("historicoYearBody").innerHTML = years.map(y=>`
+    <tr>
+      <td>${y.year}</td>
+      <td class="num ${y.result>=0?'positive':'negative'}">${y.result>=0?"+":""}${money(y.result)}</td>
+      <td class="num">${y.withdrawal?money(y.withdrawal):"—"}</td>
+    </tr>
+  `).join("");
+
+  const closed = [...cycles].sort((a,b)=> (b.endDate||"").localeCompare(a.endDate||""));
+  document.getElementById("historicoCyclesBody").innerHTML = closed.map(c=>`
+    <tr>
+      <td>${fmtDay(c.startDate)} – ${fmtDay(c.endDate)}</td>
+      <td class="num">${money(c.capitalInicial)}</td>
+      <td class="num ${c.finalResult>=0?'positive':'negative'}">${c.finalResult>=0?"+":""}${money(c.finalResult)}</td>
+      <td class="num ${c.finalRoi>=0?'positive':'negative'}">${pct(c.finalRoi)}</td>
+    </tr>
+  `).join("");
+  document.getElementById("cyclesTableWrap").hidden = closed.length===0;
 }
 
 /* default date field to today */
