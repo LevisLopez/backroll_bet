@@ -8,7 +8,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,340;0,9..144,500;0,9..144,600;1,9..144,500;1,9..144,600&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
@@ -144,8 +143,31 @@
   .stat-strip .stub b.negative{color:var(--oxblood)}
 
   /* ---------- Chart ---------- */
-  .chartbox{height:300px;background:var(--chalk);border:1px solid var(--paper-line);border-radius:10px;padding:14px}
+  .stage{background:radial-gradient(120% 130% at 50% 0%,#123A2F,#081E19);border:1px solid rgba(243,217,152,.18);border-radius:14px;padding:20px 18px 12px}
+  .hero{position:relative;height:190px}
+  .hero-label{position:absolute;top:0;left:0;font-size:11.5px;letter-spacing:.3px;color:#7FA093;font-family:'IBM Plex Sans',sans-serif}
+  .hero svg{display:block;width:100%;height:100%}
+  .stage .divider{height:1px;background:linear-gradient(90deg,transparent,rgba(243,217,152,.35),transparent);margin:12px 0}
+  .bars-scroll{overflow-x:auto;padding-bottom:2px}
+  .bars-scroll::-webkit-scrollbar{height:6px}
+  .bars-scroll::-webkit-scrollbar-thumb{background:rgba(243,217,152,.35);border-radius:3px}
+  .bars-scroll::-webkit-scrollbar-track{background:transparent}
+  .bars{position:relative;height:150px;display:flex;align-items:stretch;gap:3px;padding:0 2px}
+  .bar-col{position:relative;height:100%}
+  .zeroline{position:absolute;left:0;right:0;height:1px;background:rgba(239,233,214,.28)}
+  .bar-fill{position:absolute;left:8%;right:8%;border-radius:4px;height:0}
+  .bar-fill.up{background:linear-gradient(180deg,#5FE0A6,#1E8F63);box-shadow:0 0 14px rgba(95,224,166,.5);transform-origin:bottom;transform:scaleY(0)}
+  .bar-fill.down{background:linear-gradient(0deg,#FF8A76,#B5382A);box-shadow:0 0 14px rgba(255,138,118,.45);transform-origin:top;transform:scaleY(0)}
+  .bar-fill.grown{transform:scaleY(1);transition:transform .7s cubic-bezier(.2,.8,.2,1)}
+  .bar-val{position:absolute;left:0;right:0;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#C9DACF;opacity:0;transition:opacity .4s}
+  .bar-val.show{opacity:1}
+  .xlabels{display:flex;gap:3px;padding:8px 2px 0;margin-top:2px}
+  .xlabels span{text-align:center;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#7FA093;white-space:nowrap}
+  .stage-legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:12px;color:var(--ink-soft)}
+  .stage-legend span{display:inline-flex;align-items:center;gap:6px}
+  .stage-legend i{width:9px;height:9px;border-radius:50%;display:inline-block}
   .empty-note{padding:24px 4px;color:var(--ink-soft);font-size:13.5px;line-height:1.6}
+  @media(max-width:500px){.hero{height:160px}}
 
   /* ---------- Ledger table ---------- */
   .table-wrap{overflow-x:auto;background:var(--chalk);border:1px solid var(--paper-line);border-radius:10px}
@@ -186,8 +208,7 @@
 <div id="configScreen" class="auth-screen" hidden>
   <div class="config-note">
     <h1 style="font-size:20px;margin-bottom:10px">Falta conectar la base de datos</h1>
-    <p>Esta página está lista, pero necesita las claves de tu proyecto de Firebase para poder guardar tus datos en la nube (así los ves desde cualquier navegador o PC). Abre el archivo <code>control_rendimiento.html</code>, busca el bloque <code>firebaseConfig</code> cerca del final del script y 
-	ahí los valores de tu proyecto.</p>
+    <p>Esta página está lista, pero necesita las claves de tu proyecto de Firebase para poder guardar tus datos en la nube (así los ves desde cualquier navegador o PC). Abre el archivo <code>control_rendimiento.html</code>, busca el bloque <code>firebaseConfig</code> cerca del final del script y pega ahí los valores de tu proyecto.</p>
     <p>Si aún no tienes el proyecto creado, sigue los pasos que te di en la conversación antes de subir este archivo a GitHub.</p>
   </div>
 </div>
@@ -228,6 +249,7 @@
       <div class="field"><label>Capital inicial</label><input type="number" id="onboardCapital" min="0" step="1000" placeholder="Ej. 208000" required></div>
       <button class="btn-primary" type="submit">Empezar a registrar</button>
     </form>
+    <button type="button" class="auth-link" onclick="handleLogout()">¿No es tu cuenta? Cerrar sesión</button>
   </div>
 </div>
 
@@ -282,7 +304,36 @@
       </div>
 
       <div class="stat-strip" id="statStrip"></div>
-      <div class="chartbox"><canvas id="chart"></canvas></div>
+      <div class="stage" id="chartStage">
+        <div class="hero">
+          <span class="hero-label">Acumulado</span>
+          <svg id="curveSvg" viewBox="0 0 880 200" preserveAspectRatio="none">
+            <defs>
+              <filter id="curveGlow" x="-60%" y="-60%" width="220%" height="220%">
+                <feGaussianBlur stdDeviation="5.5" result="b"/>
+                <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+              </filter>
+              <linearGradient id="curveFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#F3D998" stop-opacity="0.32"/>
+                <stop offset="1" stop-color="#F3D998" stop-opacity="0"/>
+              </linearGradient>
+            </defs>
+            <path id="areaPath" fill="url(#curveFill)" stroke="none" opacity="0"/>
+            <path id="linePath" fill="none" stroke="#F6EFDA" stroke-width="3" stroke-linecap="round" filter="url(#curveGlow)"/>
+            <circle id="comet" r="5" fill="#FFF6DE"/>
+          </svg>
+        </div>
+        <div class="divider"></div>
+        <div class="bars-scroll" id="barsScroll">
+          <div class="bars" id="barsRow"><div class="zeroline" id="zeroline"></div></div>
+          <div class="xlabels" id="xlabelsRow"></div>
+        </div>
+      </div>
+      <div class="stage-legend" id="chartLegend">
+        <span><i style="background:#C9A24B"></i>Acumulado</span>
+        <span><i style="background:#2C6E52"></i>Ganancia</span>
+        <span><i style="background:#8B3229"></i>Pérdida</span>
+      </div>
       <div class="empty-note" id="chartEmpty" hidden>Aún no hay nada que mostrar aquí. En cuanto registres tu primer día, la curva de rendimiento aparece sola.</div>
     </section>
 
@@ -349,12 +400,7 @@
 <div class="toast" id="toast"></div>
 
 <script>
-/* =========================================================================
-   1) CONFIGURA AQUÍ TU PROYECTO DE FIREBASE
-   Reemplaza los valores de abajo por los de tu proyecto (Firebase console →
-   Configuración del proyecto → tus apps → SDK setup and configuration).
-   Estas claves son públicas por diseño de Firebase; lo que protege tus datos
-   son las reglas de seguridad de Firestore, no el secreto de estas claves.
+
 ========================================================================= */
 const firebaseConfig = {
   apiKey: "AIzaSyAc1ddLdf8fZ2-mJGtAD2O6DitnM5PXGUE",
@@ -364,6 +410,8 @@ const firebaseConfig = {
   messagingSenderId: "217032125775",
   appId: "1:217032125775:web:e3f03f3d0f93e29ea6693a"
 };
+
+
 const needsConfig = firebaseConfig.apiKey.startsWith("PEGA_");
 if (needsConfig) {
   document.getElementById("configScreen").hidden = false;
@@ -390,7 +438,6 @@ let unsubEntries = null;
 let unsubUser = null;
 let unsubCycles = null;
 let cycles = [];
-let chart = null;
 
 const AUTH_ERRORS = {
   "auth/wrong-password":"Contraseña incorrecta.",
@@ -427,24 +474,16 @@ function animateNumber(el, to, duration){
   }
   requestAnimationFrame(tick);
 }
-const zeroLinePlugin = {
-  id: "zeroLine",
-  afterDraw(c){
-    const { ctx, chartArea, scales } = c;
-    if(!scales.y || !chartArea) return;
-    const y0 = scales.y.getPixelForValue(0);
-    if(y0 < chartArea.top || y0 > chartArea.bottom) return;
-    ctx.save();
-    ctx.strokeStyle = "rgba(28,36,31,.3)";
-    ctx.setLineDash([4,4]);
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(chartArea.left, y0);
-    ctx.lineTo(chartArea.right, y0);
-    ctx.stroke();
-    ctx.restore();
+function smoothPath(points){
+  if(points.length===1){ points = [points[0], {x:points[0].x+1, y:points[0].y}]; }
+  let d = "M"+points[0].x+","+points[0].y;
+  for(let i=0;i<points.length-1;i++){
+    const p0=points[i], p1=points[i+1];
+    const mx=(p0.x+p1.x)/2;
+    d += " C"+mx+","+p0.y+" "+mx+","+p1.y+" "+p1.x+","+p1.y;
   }
-};
+  return d;
+}
 
 /* ---------- Auth screens ---------- */
 function switchAuthTab(which){
@@ -768,7 +807,8 @@ function render(){
   const grouped = groupRows(daily, view);
   document.getElementById("chartEmpty").hidden = grouped.length>0;
   document.getElementById("tableEmpty").hidden = grouped.length>0;
-  document.querySelector(".chartbox").hidden = grouped.length===0;
+  document.getElementById("chartStage").hidden = grouped.length===0;
+  document.getElementById("chartLegend").hidden = grouped.length===0;
   document.querySelector(".table-wrap").hidden = grouped.length===0;
 
   renderTable(grouped);
@@ -832,61 +872,103 @@ function renderTable(rows){
 }
 
 function renderChart(rows){
-  if(rows.length===0){ if(chart){chart.destroy(); chart=null;} return; }
-  const canvas = document.getElementById("chart");
-  const ctx = canvas.getContext("2d");
-  if(chart) chart.destroy();
+  if(rows.length===0) return;
 
-  const gradient = ctx.createLinearGradient(0,0,0,canvas.clientHeight||280);
-  gradient.addColorStop(0,"rgba(201,162,75,.28)");
-  gradient.addColorStop(1,"rgba(201,162,75,0)");
+  /* ---- curva "cometa" ---- */
+  const W=880, H=200, PAD=14;
+  const cumulative = rows.map(r=>r.cumulative);
+  const minC = Math.min(...cumulative), maxC = Math.max(...cumulative);
+  const spanC = (maxC-minC) || 1;
+  const pts = cumulative.map((v,i)=>({
+    x: PAD + (W-2*PAD) * (rows.length>1 ? i/(rows.length-1) : 0.5),
+    y: PAD + (H-2*PAD) * (1-(v-minC)/spanC)
+  }));
+  const lineD = smoothPath(pts);
+  const areaD = lineD + " L"+pts[pts.length-1].x+","+H+" L"+pts[0].x+","+H+" Z";
 
-  chart = new Chart(ctx, {
-    data:{
-      labels: rows.map(r=>r.label),
-      datasets:[
-        {
-          type:"bar", label:"Resultado del periodo",
-          data: rows.map(r=>r.result),
-          backgroundColor: rows.map(r=>r.result>=0 ? "rgba(44,110,82,.85)" : "rgba(139,50,41,.8)"),
-          borderRadius:4, maxBarThickness:30, order:2, yAxisID:"y1"
-        },
-        {
-          type:"line", label:"Acumulado",
-          data: rows.map(r=>r.cumulative),
-          borderColor:"#C9A24B", backgroundColor:gradient, fill:true,
-          borderWidth:2.5, tension:.3,
-          pointRadius:rows.length>1?2:4, pointHoverRadius:6,
-          pointBackgroundColor:"#C9A24B", pointBorderColor:"#FBF8F0", pointBorderWidth:1.5,
-          order:1, yAxisID:"y"
-        }
-      ]
-    },
-    plugins:[zeroLinePlugin],
-    options:{
-      responsive:true, maintainAspectRatio:false,
-      animation:{ duration:850, easing:"easeOutQuart" },
-      interaction:{ mode:"index", intersect:false },
-      plugins:{
-        legend:{
-          position:"bottom",
-          labels:{ color:"#5B6660", usePointStyle:true, pointStyle:"circle", boxWidth:7, font:{family:"IBM Plex Sans", size:11.5} }
-        },
-        tooltip:{
-          backgroundColor:"#0E3B2E", titleColor:"#E9D9A8", bodyColor:"#FBF8F0",
-          borderColor:"#C9A24B", borderWidth:1, padding:10, cornerRadius:8, displayColors:false,
-          callbacks:{ label: (c)=> c.dataset.label + ": " + (c.parsed.y>=0?"+":"") + money(c.parsed.y) }
-        }
-      },
-      scales:{
-        x:{
-          ticks:{ color:"#5B6660", font:{family:"IBM Plex Mono", size:10.5}, maxRotation:0, minRotation:0, autoSkip:true, autoSkipPadding:14 },
-          grid:{ display:false }
-        },
-        y:{ position:"left", ticks:{ color:"#5B6660", callback:v=>"$"+Number(v).toLocaleString("es-CO"), font:{family:"IBM Plex Mono", size:10.5} }, grid:{ color:"#E4DBC2", borderDash:[3,4] } },
-        y1:{ position:"right", ticks:{ display:false }, grid:{ display:false } }
-      }
+  const linePath = document.getElementById("linePath");
+  const areaPath = document.getElementById("areaPath");
+  linePath.setAttribute("d", lineD);
+  areaPath.setAttribute("d", areaD);
+  areaPath.style.transition = "none";
+  areaPath.style.opacity = "0";
+
+  const len = linePath.getTotalLength();
+  linePath.style.transition = "none";
+  linePath.style.strokeDasharray = len;
+  linePath.style.strokeDashoffset = len;
+  const comet = document.getElementById("comet");
+  comet.setAttribute("cx", pts[0].x);
+  comet.setAttribute("cy", pts[0].y);
+
+  requestAnimationFrame(()=>{
+    linePath.style.transition = "stroke-dashoffset 1.3s cubic-bezier(.2,.7,.2,1)";
+    linePath.style.strokeDashoffset = "0";
+    areaPath.style.transition = "opacity 1.1s ease";
+    areaPath.style.opacity = "1";
+    const start = performance.now(), duration=1300;
+    function tick(now){
+      const t = Math.min(1,(now-start)/duration);
+      const eased = 1-Math.pow(1-t,3);
+      const p = linePath.getPointAtLength(eased*len);
+      comet.setAttribute("cx",p.x); comet.setAttribute("cy",p.y);
+      if(t<1) requestAnimationFrame(tick);
     }
+    requestAnimationFrame(tick);
+  });
+
+  /* ---- franja de barras ---- */
+  const results = rows.map(r=>r.result);
+  const maxUp = Math.max(1, ...results.filter(r=>r>0), 0);
+  const maxDown = Math.max(1, ...results.filter(r=>r<0).map(r=>-r), 0);
+  const total = maxUp+maxDown;
+  const zeroTopPct = (maxUp/total)*100;
+
+  const barsEl = document.getElementById("barsRow");
+  const xEl = document.getElementById("xlabelsRow");
+  const scrollWrap = document.getElementById("barsScroll");
+  barsEl.innerHTML = '<div class="zeroline" id="zeroline"></div>';
+  document.getElementById("zeroline").style.top = zeroTopPct+"%";
+  xEl.innerHTML = "";
+
+  const MIN_COL = 22, GAP = 3, n = rows.length;
+  const visibleWidth = scrollWrap.clientWidth || 640;
+  const evenWidth = (visibleWidth - GAP*(n-1)) / n;
+  const colWidth = Math.max(MIN_COL, evenWidth);
+  const totalWidth = colWidth*n + GAP*(n-1);
+  barsEl.style.width = totalWidth+"px";
+  xEl.style.width = totalWidth+"px";
+  const skipEvery = n > 16 ? Math.ceil(n/16) : 1;
+  const showValueLabels = colWidth >= 34;
+
+  rows.forEach((r,i)=>{
+    const col = document.createElement("div"); col.className="bar-col";
+    col.style.flex = "0 0 "+colWidth+"px";
+    const fill = document.createElement("div"); fill.className="bar-fill "+(r.result>=0?"up":"down");
+    const val = document.createElement("div"); val.className="bar-val";
+    val.textContent = showValueLabels ? ((r.result>=0?"+":"")+money(r.result)) : "";
+    col.title = r.label+": "+(r.result>=0?"+":"")+money(r.result);
+
+    if(r.result>=0){
+      const h = (r.result/maxUp)*zeroTopPct;
+      fill.style.bottom = (100-zeroTopPct)+"%";
+      fill.style.height = h+"%";
+      val.style.top = (100-zeroTopPct-h-14)+"%";
+    } else {
+      const h = (-r.result/maxDown)*(100-zeroTopPct);
+      fill.style.top = zeroTopPct+"%";
+      fill.style.height = h+"%";
+      val.style.top = (zeroTopPct+h+4)+"%";
+    }
+    col.appendChild(fill); col.appendChild(val);
+    barsEl.appendChild(col);
+
+    const label = document.createElement("span");
+    label.style.flex = "0 0 "+colWidth+"px";
+    label.textContent = (i % skipEvery === 0) ? r.label : "";
+    xEl.appendChild(label);
+
+    setTimeout(()=>{ fill.classList.add("grown"); val.classList.add("show"); }, 100 + i*60);
   });
 }
 
